@@ -49,7 +49,7 @@ def train(config, num_workers, num_threads, cuda, restart_train, mGPU):
     # dataset and dataloader
     data_set = TrainDataSet(
         train_config['dataset_configs'],
-        img_format='.bmp',
+        img_format='.png',
         degamma=True,
         color=False,
         blind=arch_config['blind_est']
@@ -214,28 +214,27 @@ def train(config, num_workers, num_threads, cuda, restart_train, mGPU):
 
 
 def eval(config, args):
+    import os
+    from torchvision.transforms import transforms
+    from PIL import Image
+
     train_config = config['training']
     arch_config = config['architecture']
-
     use_cache = train_config['use_cache']
 
     print('Eval Process......')
 
     checkpoint_dir = train_config['checkpoint_dir']
-    if not os.path.exists(checkpoint_dir) or len(os.listdir(checkpoint_dir)) == 0:
-        print('There is no any checkpoint file in path:{}'.format(checkpoint_dir))
-    # the path for saving eval images
     eval_dir = train_config['eval_dir']
     if not os.path.exists(eval_dir):
-        os.mkdir(eval_dir)
-    files = os.listdir(eval_dir)
-    for f in files:
-        os.remove(os.path.join(eval_dir, f))
+        os.makedirs(eval_dir)
+    else:
+        for f in os.listdir(eval_dir):
+            os.remove(os.path.join(eval_dir, f))
 
-    # dataset and dataloader
     data_set = TrainDataSet(
         train_config['dataset_configs'],
-        img_format='.bmp',
+        img_format='.png',
         degamma=True,
         color=False,
         blind=arch_config['blind_est'],
@@ -250,7 +249,6 @@ def eval(config, args):
 
     dataset_config = read_config(train_config['dataset_configs'], _configspec_path())['dataset_configs']
 
-    # model here
     model = KPN(
         color=False,
         burst_length=dataset_config['burst_length'],
@@ -264,29 +262,30 @@ def eval(config, args):
     )
     if args.cuda:
         model = model.cuda()
-
     if args.mGPU:
         model = nn.DataParallel(model)
-    # load trained model
+
+    print("Trying to load checkpoint from:", args.checkpoint)
     ckpt = load_checkpoint(checkpoint_dir, args.checkpoint)
-    model.load_state_dict(ckpt['state_dict'])
+    state_dict = ckpt['state_dict']
+    new_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    model.load_state_dict(new_state_dict)
     print('The model has been loaded from epoch {}, n_iter {}.'.format(ckpt['epoch'], ckpt['global_iter']))
-    # switch the eval mode
+
     model.eval()
-
-    # data_loader = iter(data_loader)
-    burst_length = dataset_config['burst_length']
-    data_length = burst_length if arch_config['blind_est'] else burst_length + 1
-    patch_size = dataset_config['patch_size']
-
     trans = transforms.ToPILImage()
+    burst_length = dataset_config['burst_length']
 
     with torch.no_grad():
         psnr = 0.0
         ssim = 0.0
         for i, (burst_noise, gt, white_level) in enumerate(data_loader):
-            if i < 100:
-                # data = next(data_loader)
+            try:
+                print(f"Item {i}: burst {burst_noise.shape}, gt {gt.shape}, white_level {white_level.shape}")
+
+                if i >= 100:
+                    break
+
                 if args.cuda:
                     burst_noise = burst_noise.cuda()
                     gt = gt.cuda()
@@ -312,14 +311,20 @@ def eval(config, args):
                     gt = gt.cpu()
                     burst_noise = burst_noise.cpu()
 
+                print(f"SAVING {i}: PSNR = {psnr_t:.2f}, SSIM = {ssim_t:.4f}")
+                print(f"Saving to: {eval_dir}")
+
                 trans(burst_noise[0, 0, ...].squeeze()).save(os.path.join(eval_dir, '{}_noisy_{:.2f}dB.png'.format(i, psnr_noisy)), quality=100)
                 trans(pred.squeeze()).save(os.path.join(eval_dir, '{}_pred_{:.2f}dB.png'.format(i, psnr_t)), quality=100)
                 trans(gt.squeeze()).save(os.path.join(eval_dir, '{}_gt.png'.format(i)), quality=100)
 
-                print('{}-th image is OK, with PSNR: {:.2f}dB, SSIM: {:.4f}'.format(i, psnr_t, ssim_t))
-            else:
-                break
-        print('All images are OK, average PSNR: {:.2f}dB, SSIM: {:.4f}'.format(psnr/100, ssim/100))
+                print(f'{i}-th image is OK, with PSNR: {psnr_t:.2f}dB, SSIM: {ssim_t:.4f}')
+            except Exception as e:
+                print(f"🔥 Ошибка при обработке {i}-го изображения:", e)
+
+        avg_psnr = psnr / max(i+1, 1)
+        avg_ssim = ssim / max(i+1, 1)
+        print('All images are OK, average PSNR: {:.2f}dB, SSIM: {:.4f}'.format(avg_psnr, avg_ssim))
 
 
 if __name__ == '__main__':
@@ -337,8 +342,11 @@ if __name__ == '__main__':
                         help='the checkpoint to eval')
     args = parser.parse_args()
     #
+    print('Trying to load checkpoint from:', args.checkpoint)
+
     config = read_config(args.config_file, args.config_spec)
     if args.eval:
         eval(config, args)
     else:
         train(config, args.num_workers, args.num_threads, args.cuda, args.restart, args.mGPU)
+
