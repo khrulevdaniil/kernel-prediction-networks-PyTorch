@@ -180,6 +180,8 @@ def create_vis(degraded_img, target_img, output_img, exposure=None):
     return img
 
 
+
+'''
 def calculate_psnr(output_img, target_img):
     target_tf = torch2numpy(target_img)
     output_tf = torch2numpy(output_img)
@@ -203,5 +205,33 @@ def calculate_ssim(output_img, target_img):
                                              output_tf[im_idx, ...],
                                              multichannel=True,
                                              data_range=255)
+        n += 1.0
+    return ssim / n
+'''
+
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+
+def calculate_psnr(output_img, target_img):
+    target_tf = torch2numpy(target_img)
+    output_tf = torch2numpy(output_img)
+    psnr = 0.0
+    n = 0.0
+    for im_idx in range(output_tf.shape[0]):
+        psnr += peak_signal_noise_ratio(target_tf[im_idx, ...],
+                                        output_tf[im_idx, ...],
+                                        data_range=255)
+        n += 1.0
+    return psnr / n
+
+def calculate_ssim(output_img, target_img):
+    target_tf = torch2numpy(target_img)
+    output_tf = torch2numpy(output_img)
+    ssim = 0.0
+    n = 0.0
+    for im_idx in range(output_tf.shape[0]):
+        ssim += structural_similarity(target_tf[im_idx, ...],
+                                      output_tf[im_idx, ...],
+                                      channel_axis=-1,  # для новых версий вместо multichannel=True
+                                      data_range=255)
         n += 1.0
     return ssim / n
