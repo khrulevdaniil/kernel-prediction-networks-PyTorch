@@ -47,25 +47,32 @@ def _represent_int(s):
     except ValueError:
         return False
 
+def load_checkpoint(checkpoint_dir, checkpoint_file=None):
+    import os
+    import torch
 
-def load_checkpoint(checkpoint_dir, best_or_latest='best'):
-    if best_or_latest == 'best':
-        checkpoint_file = os.path.join(checkpoint_dir, 'model_best.pth.tar')
-    elif isinstance(best_or_latest, numbers.Number):
-        checkpoint_file = os.path.join(checkpoint_dir,
-                                       '{:06d}.pth.tar'.format(best_or_latest))
-        if not os.path.exists(checkpoint_file):
-            files = glob.glob(os.path.join(checkpoint_dir, '*.pth.tar'))
-            basenames = [os.path.basename(f).split('.')[0] for f in files]
-            iters = sorted([int(b) for b in basenames if _represent_int(b)])
-            raise ValueError('Available iterations are ({} requested): {}'.format(best_or_latest, iters))
+    if checkpoint_file is None:
+        # Авто-поиск последнего чекпоинта по числу итерации
+        iters = []
+        for file in os.listdir(checkpoint_dir):
+            if file.endswith(".pth.tar"):
+                try:
+                    iters.append(int(file.split(".")[0]))
+                except ValueError:
+                    continue
+        if len(iters) == 0:
+            raise FileNotFoundError("No numbered .pth.tar checkpoints found in directory {}".format(checkpoint_dir))
+        latest_file = os.path.join(checkpoint_dir, '{:06d}.pth.tar'.format(sorted(iters)[-1]))
+        print(f"Loading latest checkpoint: {latest_file}")
+        return torch.load(latest_file)
     else:
-        files = glob.glob(os.path.join(checkpoint_dir, '*.pth.tar'))
-        basenames = [os.path.basename(f).split('.')[0] for f in files]
-        iters = sorted([int(b) for b in basenames if _represent_int(b)])
-        checkpoint_file = os.path.join(checkpoint_dir,
-                                       '{:06d}.pth.tar'.format(iters[-1]))
-    return torch.load(checkpoint_file)
+        # Абсолютный или относительный путь к файлу
+        full_path = checkpoint_file
+        if not os.path.exists(full_path):
+            full_path = os.path.join(checkpoint_dir, checkpoint_file)
+        print(f"Loading checkpoint: {full_path}")
+        return torch.load(full_path)
+
 
 
 def load_statedict_runtime(checkpoint_dir, best_or_latest='best'):
