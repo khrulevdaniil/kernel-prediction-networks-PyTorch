@@ -24,7 +24,7 @@ def sRGBGamma(tensor):
     # image_hi = (1 + a) * torch.pow(tensor + 0.001, 1.0 / gamma) - a
     res[mask] = (1 + a) * torch.pow(tensor[mask] + 0.001, 1.0 / gamma) - a
 
-    res[1-mask] = tensor[1-mask] * mult
+    res[~mask] = tensor[~mask] * mult
     # return mask * image_hi + (1 - mask) * image_lo
     return res
 
@@ -38,7 +38,8 @@ def UndosRGBGamma(tensor):
     mask = tensor > threshold
     # image_lo = tensor / mult
     # image_hi = torch.pow(tensor + a, gamma) / (1 + a)
-    res[1-mask] = tensor[1-mask] / mult
+    #res[1-mask] = tensor[1-mask] / mult
+    res[~mask] = tensor[~mask] / mult
     res[mask] = torch.pow(tensor[mask] + a, gamma) / (1 + a)
     # return mask * image_hi + (1 - mask) * image_lo
     return res
