@@ -325,7 +325,8 @@ def eval(config, args):
         avg_psnr = psnr / max(i+1, 1)
         avg_ssim = ssim / max(i+1, 1)
         print('All images are OK, average PSNR: {:.2f}dB, SSIM: {:.4f}'.format(avg_psnr, avg_ssim))
-#new 
+
+#работает на без метрик и правильно ли?
 def custom_eval(burst_dir, model, args):
     import glob
     import os
@@ -369,7 +370,7 @@ def custom_eval(burst_dir, model, args):
     print(f"PSNR (to ref): {psnr_t:.2f}dB, SSIM: {ssim_t:.4f}")
 
     # Сохраняем изображения
-    eval_dir = args.custom_burst_dir + "_output"
+    eval_dir = args.custom_burst_dir + "_outputimage2"
     os.makedirs(eval_dir, exist_ok=True)
     
     to_pil_image(ref.squeeze().cpu()).save(os.path.join(eval_dir, f"0_ref_{psnr_t:.2f}dB.png"))
@@ -394,6 +395,94 @@ def custom_eval(burst_dir, model, args):
     plt.show()
 
 
+#new
+
+'''
+def custom_eval(burst_dir, model, args):
+    import glob
+    import os
+    import torch
+    from PIL import Image
+    from torchvision import transforms
+    import matplotlib.pyplot as plt
+    from utils.training_util import calculate_psnr, calculate_ssim
+    from kpn_data_provider import sRGBGamma
+
+    # === Чтение и предобработка изображений ===
+    filenames = sorted(glob.glob(os.path.join(burst_dir, '*.png')))
+    print(f"Found {len(filenames)} images.")
+
+    N = args.num_burst_frames
+    if len(filenames) < N:
+        raise ValueError(f"Недостаточно изображений в папке {burst_dir}. Требуется как минимум {N}.")
+
+    filenames = filenames[:N]  # Обрезаем до нужного количества кадров
+
+    transform = transforms.Compose([
+        transforms.Grayscale(),
+        transforms.Resize((640, 640)),
+        transforms.ToTensor()
+    ])
+
+    burst = [transform(Image.open(f)) for f in filenames]
+    burst_tensor = torch.stack(burst, dim=0).unsqueeze(0).cuda()  # [1, N, 1, H, W]
+    burst_tensor = burst_tensor.squeeze(2)                        # [1, N, H, W]
+
+    ref = burst_tensor[:, 0:1, :, :]                              # [1, 1, H, W]
+    white_level = torch.ones((1, 1, 1, 1)).cuda()
+
+    print("burst_tensor shape:", burst_tensor.shape)
+    print("ref shape:", ref.shape)
+
+    # === Прогон через модель ===
+    model.eval()
+    with torch.no_grad():
+        pred_i, pred = model(burst_tensor, ref, white_level)
+
+    # === Применение гаммы ===
+    burst_tensor = sRGBGamma(burst_tensor / white_level)
+    pred_i = sRGBGamma(pred_i)
+    pred = sRGBGamma(pred)
+    gt = burst_tensor[:, 0, :, :]  # используем ref как GT (приближённо)
+
+    # === Расчёт метрик ===
+    psnr_pred = calculate_psnr(pred.unsqueeze(1), gt.unsqueeze(1))
+    ssim_pred = calculate_ssim(pred.unsqueeze(1), gt.unsqueeze(1))
+    psnr_noisy = calculate_psnr(burst_tensor[:, 0, ...].unsqueeze(1), gt.unsqueeze(1))
+
+    print(f"📊 PSNR (Noisy vs GT): {psnr_noisy:.2f} dB")
+    print(f"📊 PSNR (Pred vs GT): {psnr_pred:.2f} dB")
+    print(f"📊 SSIM (Pred vs GT): {ssim_pred:.4f}")
+
+    # === Сохранение результатов ===
+    out_dir = f"{burst_dir}_out_{N}_frames"
+    os.makedirs(out_dir, exist_ok=True)
+
+    to_img = transforms.ToPILImage()
+    to_img(ref.squeeze().cpu()).save(os.path.join(out_dir, 'ref.png'))
+    to_img(pred.squeeze().cpu()).save(os.path.join(out_dir, 'pred.png'))
+    to_img(burst_tensor[0, 1].squeeze().cpu()).save(os.path.join(out_dir, 'burst_1.png'))
+
+    print(f"✅ Результаты сохранены в: {out_dir}")
+
+    # === Визуализация ===
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 3, 1)
+    plt.imshow(ref.squeeze().cpu(), cmap='gray')
+    plt.title(f"Reference (1 of {N})")
+
+    plt.subplot(1, 3, 2)
+    plt.imshow(pred.squeeze().cpu(), cmap='gray')
+    plt.title("Denoised Output")
+
+    plt.subplot(1, 3, 3)
+    plt.imshow(burst_tensor[0, 1].squeeze().cpu(), cmap='gray')
+    plt.title("Next Frame")
+
+    plt.tight_layout()
+    plt.show()
+'''
+
 #end new
 
 
@@ -411,6 +500,8 @@ if __name__ == '__main__':
     #new
     parser.add_argument('--custom_eval', action='store_true', help='Use manually loaded burst frames')
     parser.add_argument('--custom_burst_dir', type=str, default='./burst_test', help='Folder with real test frames')
+    parser.add_argument('--num_burst_frames', type=int, default=9, help='Number of burst frames to use')
+
     # end new
     parser.add_argument('--checkpoint', '-ckpt', dest='checkpoint', type=str, default='best',
                         help='the checkpoint to eval')
@@ -456,6 +547,9 @@ if __name__ == '__main__':
 
     elif args.eval:
       eval(config, args)
+
+
+
 
 
 
