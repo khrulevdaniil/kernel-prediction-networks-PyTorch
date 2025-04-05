@@ -325,6 +325,76 @@ def eval(config, args):
         avg_psnr = psnr / max(i+1, 1)
         avg_ssim = ssim / max(i+1, 1)
         print('All images are OK, average PSNR: {:.2f}dB, SSIM: {:.4f}'.format(avg_psnr, avg_ssim))
+#new 
+def custom_eval(burst_dir, model, args):
+    import glob
+    import os
+    from PIL import Image
+    from torchvision import transforms
+    import torch
+    import matplotlib.pyplot as plt
+    from utils.training_util import calculate_psnr, calculate_ssim
+    from torchvision.transforms.functional import to_pil_image
+
+    filenames = sorted(glob.glob(os.path.join(burst_dir, '*.png')))
+    print(f"Found {len(filenames)} images.")
+
+    transform = transforms.Compose([
+        transforms.Grayscale(),
+        transforms.Resize((640, 640)),
+        transforms.ToTensor()
+    ])
+
+    burst = [transform(Image.open(f)) for f in filenames]
+    burst_tensor = torch.stack(burst, dim=0)           # [N, 1, H, W]
+    burst_tensor = burst_tensor.squeeze(1)             # [N, H, W]
+    burst_tensor = burst_tensor.unsqueeze(0).cuda()    # [1, N, H, W]
+
+    ref = burst_tensor[:, 0:1, :, :]                   # [1, 1, H, W]
+    white_level = torch.ones((1, 1, 1, 1)).cuda()
+
+    print("burst_tensor shape:", burst_tensor.shape)  
+    print("ref shape:", ref.shape)
+
+    model.eval()
+    with torch.no_grad():
+        pred_i, pred = model(burst_tensor, ref, white_level)
+
+    pred = torch.clamp(pred, 0.0, 1.0)
+
+    # PSNR/SSIM относительно первого кадра (референса)
+    psnr_t = calculate_psnr(pred.unsqueeze(1), ref)
+    ssim_t = calculate_ssim(pred.unsqueeze(1), ref)
+
+    print(f"PSNR (to ref): {psnr_t:.2f}dB, SSIM: {ssim_t:.4f}")
+
+    # Сохраняем изображения
+    eval_dir = args.custom_burst_dir + "_output"
+    os.makedirs(eval_dir, exist_ok=True)
+    
+    to_pil_image(ref.squeeze().cpu()).save(os.path.join(eval_dir, f"0_ref_{psnr_t:.2f}dB.png"))
+    to_pil_image(pred.squeeze().cpu()).save(os.path.join(eval_dir, f"0_pred_{psnr_t:.2f}dB.png"))
+    to_pil_image(burst_tensor[0, 1].squeeze().cpu()).save(os.path.join(eval_dir, f"0_noisy.png"))
+
+    # Визуализация
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 3, 1)
+    plt.imshow(ref.squeeze().cpu(), cmap='gray')
+    plt.title("Reference Frame")
+
+    plt.subplot(1, 3, 2)
+    plt.imshow(pred.squeeze().cpu(), cmap='gray')
+    plt.title(f"Denoised Output\nPSNR: {psnr_t:.2f} dB")
+
+    plt.subplot(1, 3, 3)
+    plt.imshow(burst_tensor[0, 1].squeeze().cpu(), cmap='gray')
+    plt.title("Other Burst Frame")
+
+    plt.tight_layout()
+    plt.show()
+
+
+#end new
 
 
 if __name__ == '__main__':
@@ -338,6 +408,10 @@ if __name__ == '__main__':
     parser.add_argument('--cuda', '-c', action='store_true', help='whether to train on the GPU')
     parser.add_argument('--mGPU', '-m', action='store_true', help='whether to train on multiple GPUs')
     parser.add_argument('--eval', action='store_true', help='whether to work on the evaluation mode')
+    #new
+    parser.add_argument('--custom_eval', action='store_true', help='Use manually loaded burst frames')
+    parser.add_argument('--custom_burst_dir', type=str, default='./burst_test', help='Folder with real test frames')
+    # end new
     parser.add_argument('--checkpoint', '-ckpt', dest='checkpoint', type=str, default='best',
                         help='the checkpoint to eval')
     args = parser.parse_args()
@@ -345,9 +419,45 @@ if __name__ == '__main__':
     print('Trying to load checkpoint from:', args.checkpoint)
 
     config = read_config(args.config_file, args.config_spec)
+    '''
     if args.eval:
         eval(config, args)
     else:
         train(config, args.num_workers, args.num_threads, args.cuda, args.restart, args.mGPU)
+    '''
+    if args.custom_eval:
+      arch_config = config['architecture']
+      dataset_config = read_config(config['training']['dataset_configs'], _configspec_path())['dataset_configs']
+
+      model = KPN(
+          color=False,
+          burst_length=dataset_config['burst_length'],
+          blind_est=arch_config['blind_est'],
+          kernel_size=list(map(int, arch_config['kernel_size'].split())),
+          sep_conv=arch_config['sep_conv'],
+          channel_att=arch_config['channel_att'],
+          spatial_att=arch_config['spatial_att'],
+          upMode=arch_config['upMode'],
+          core_bias=arch_config['core_bias']
+      )
+
+      if args.cuda:
+          model = model.cuda()
+      if args.mGPU:
+          model = nn.DataParallel(model)
+
+      ckpt = load_checkpoint(config['training']['checkpoint_dir'], args.checkpoint)
+      state_dict = ckpt['state_dict']
+      new_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+      model.load_state_dict(new_state_dict)
+
+
+      custom_eval(args.custom_burst_dir, model, args)
+
+    elif args.eval:
+      eval(config, args)
+
+
+
 
 
